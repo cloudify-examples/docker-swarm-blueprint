@@ -1,0 +1,192 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.4.1/types.yaml
+  - http://www.getcloudify.org/spec/openstack-plugin/1.4/plugin.yaml
+  - http://www.getcloudify.org/spec/diamond-plugin/1.3.4/plugin.yaml
+  - imports/scale.yaml
+
+inputs:
+  image:
+    description: image
+  flavor:
+    description: flavor
+  agent_user:
+    description: user for agents
+
+node_templates:
+
+  managers_tier:
+    type: cloudify.nodes.Tier
+
+  workers_tier:
+    type: cloudify.nodes.Tier
+
+  manager_host:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      agent_config:
+        user: {get_input: agent_user}
+      image: {get_input: image}
+      flavor: {get_input: flavor}
+    relationships:
+      - type: cloudify.openstack.server_connected_to_floating_ip
+        target: manager_public_ip
+      - type: cloudify.openstack.server_connected_to_security_group
+        target: swarm_secgroup
+      - type: cloudify.relationships.contained_in
+        target: managers_tier
+
+  worker_host:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      agent_config:
+        user: {get_input: agent_user}
+      image: {get_input: image}
+      flavor: {get_input: flavor}
+    relationships:
+      - type: cloudify.openstack.server_connected_to_security_group
+        target: swarm_secgroup
+      - type: cloudify.relationships.contained_in
+        target: managers_tier
+    interfaces:
+      cloudify.interfaces.monitoring_agent:
+          install:
+            implementation: diamond.diamond_agent.tasks.install
+            inputs:
+              diamond_config:
+                interval: 2
+          start: diamond.diamond_agent.tasks.start
+          stop: diamond.diamond_agent.tasks.stop
+          uninstall: diamond.diamond_agent.tasks.uninstall
+      cloudify.interfaces.monitoring:
+          start:
+            implementation: diamond.diamond_agent.tasks.add_collectors
+            inputs:
+              collectors_config:
+                CPUCollector: {}
+                MemoryCollector: {}
+                LoadAverageCollector: {}
+                DiskUsageCollector:
+                  config:
+                    devices: x?vd[a-z]+[0-9]*$
+                NetworkCollector: {}
+
+  swarm_secgroup:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      resource_id: swarm_secgroup
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          port: 22
+        - remote_ip_prefix: 0.0.0.0/0
+          port: 2377
+        - remote_ip_prefix: 0.0.0.0/0
+          port: 80
+
+  manager_public_ip:
+    type: cloudify.openstack.nodes.FloatingIP
+
+  manager:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start:
+          implementation: scripts/start-manager.sh
+          inputs:
+            process:
+              env:
+                IP: {get_attribute: [manager_host, ip]}
+    relationships:
+      - target: manager_host
+        type: cloudify.relationships.contained_in
+
+  worker:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        configure: scripts/configure-worker.sh
+        start:
+          implementation: scripts/start-worker.sh
+          inputs:
+            process:
+              env:
+                IP: {get_attribute: [worker_host, ip]}
+                MASTERIP: {get_attribute: [manager_host, ip]}
+                TOKEN: {get_attribute: [manager, worker_token]}
+        stop: scripts/stop-worker.sh
+    relationships:
+      - target: worker_host
+        type: cloudify.relationships.contained_in
+      - target: manager
+        type: cloudify.relationships.connected_to
+
+groups:
+
+ scale_up_group:
+   members: [worker_host]
+   policies:
+     auto_scale_up:
+       type: scale_policy_type
+       properties:
+         policy_operates_on_group: true
+         scale_limit: 4
+         scale_direction: '<'
+         scale_threshold: 50
+         service_selector: .*worker_host.*cpu.total.user
+         cooldown_time: 120
+       triggers:
+         execute_scale_workflow:
+           type: cloudify.policies.triggers.execute_workflow
+           parameters:
+             workflow: scale
+             workflow_parameters:
+               delta: 1
+               scalable_entity_name: worker_host
+               scale_compute: true
+
+ scale_down_group:
+   members: [worker_host]
+   policies:
+     auto_scale_down:
+       type: scale_policy_type
+       properties:
+         scale_limit: 1
+         scale_direction: '>'
+         scale_threshold: 10
+         service_selector: .*worker_host.*cpu.total.user
+         cooldown_time: 60
+         moving_window_size: 60
+       triggers:
+         execute_scale_workflow:
+           type: cloudify.policies.triggers.execute_workflow
+           parameters:
+             workflow: scale
+             workflow_parameters:
+               delta: -1
+               scalable_entity_name: worker_host
+               scale_compute: true
+
+ heal_group:
+   members: [worker_host]
+   policies:
+     simple_autoheal_policy:
+       type: cloudify.policies.types.host_failure
+       properties:
+         service:
+           - .*worker_host.*cpu.total.system
+           - .*manager_host.*cpu.total.system
+         interval_between_workflows: 60
+       triggers:
+         auto_heal_trigger:
+           type: cloudify.policies.triggers.execute_workflow
+           parameters:
+             workflow: heal
+             workflow_parameters:
+               node_instance_id: { 'get_property': [ SELF, node_id ] }
+               diagnose_value: { 'get_property': [ SELF, diagnose ] }
+
+outputs:
+  manager_ip:
+    description: swarm manager ip
+    value: {get_attribute: [manager_public_ip, floating_ip_address]}
