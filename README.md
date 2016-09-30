@@ -7,7 +7,7 @@ The blueprints in this project provide orchestration for starting, healing, and 
 
 ### Prerequisites
 
-These blueprints have only been tested against an Ubuntu 14.04 image with 2GB of RAM.  The image used must be pre-installed with Docker 1.12.  Any image use should have passwordless ssh, and passwordless sudo with `requiretty` false or commented out in sudoers.  Also required is an Openstack cloud environment.  The blueprints were tested on Openstack Kilo.
+These blueprints have only been tested against an Ubuntu 14.04 image with 2GB of RAM.  The image used must be pre-installed with Docker 1.12.  Any image used should have passwordless ssh, and passwordless sudo with `requiretty` false or commented out in sudoers.  Also required is an Openstack cloud environment.  The blueprints were tested on Openstack Kilo.
 
 ### Cloudify Version
 
