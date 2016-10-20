@@ -1,3 +1,5 @@
+[![Build Status](https://circleci.com/gh/cloudify-examples/docker-swarm-blueprint.svg?style=shield&circle-token=:circle-token)](https://circleci.com/gh/cloudify-examples/docker-swarm-blueprint)
+
 ## Docker Swarm Example Blueprint
 
 The blueprints in this project provide orchestration for starting, healing, and scaling a Docker Swarm cluster on Openstack.  There are 3 blueprints, with slightly different use cases:
