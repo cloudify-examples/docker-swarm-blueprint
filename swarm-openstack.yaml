@@ -1,0 +1,95 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.4/types.yaml
+  - http://www.getcloudify.org/spec/openstack-plugin/1.4/plugin.yaml
+
+inputs:
+  image:
+    description: image
+  flavor:
+    description: flavor
+  agent_user:
+    description: user for agents
+
+node_templates:
+
+  manager_host:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      agent_config:
+        user: {get_input: agent_user}
+      image: {get_input: image}
+      flavor: {get_input: flavor}
+    relationships:
+      - type: cloudify.openstack.server_connected_to_floating_ip
+        target: manager_public_ip
+      - type: cloudify.openstack.server_connected_to_security_group
+        target: swarm_secgroup
+
+  worker_host:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      agent_config:
+        user: {get_input: agent_user}
+      image: {get_input: image}
+      flavor: {get_input: flavor}
+    relationships:
+      - type: cloudify.openstack.server_connected_to_security_group
+        target: swarm_secgroup
+
+  swarm_secgroup:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      resource_id: swarm_secgroup
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          port: 22
+        - remote_ip_prefix: 0.0.0.0/0
+          port: 2377
+        - remote_ip_prefix: 0.0.0.0/0
+          port: 80
+        - remote_ip_prefix: 0.0.0.0/0 # rest
+          port: 2375
+
+  manager_public_ip:
+    type: cloudify.openstack.nodes.FloatingIP
+
+  manager:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start:
+          implementation: scripts/start-manager.sh
+          inputs:
+            process:
+              env:
+                IP: {get_attribute: [manager_host, ip]}
+    relationships:
+      - target: manager_host
+        type: cloudify.relationships.contained_in
+
+  worker:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start:
+          implementation: scripts/start-worker.sh
+          inputs:
+            process:
+              env:
+                IP: {get_attribute: [worker_host, ip]}
+                MASTERIP: {get_attribute: [manager_host, ip]}
+                TOKEN: {get_attribute: [manager, worker_token]}
+                LABEL: role=worker
+    relationships:
+      - target: worker_host
+        type: cloudify.relationships.contained_in
+      - target: manager
+        type: cloudify.relationships.connected_to
+
+outputs:
+  swarm_info:
+    value:
+      manager_ip: {get_attribute: [manager_public_ip, floating_ip_address]}
+      manager_port: 2375

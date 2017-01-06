@@ -3,7 +3,7 @@
 
 # create image for generating cpu load
 
-ctx download-resource resources/containers/stress.tgz /tmp/stress.tgz
+ctx download-resource containers/stress.tgz /tmp/stress.tgz
 
 cd /tmp
 

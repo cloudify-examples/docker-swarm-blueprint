@@ -1,0 +1,207 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.4/types.yaml
+  - http://www.getcloudify.org/spec/openstack-plugin/1.4/plugin.yaml
+  - http://www.getcloudify.org/spec/fabric-plugin/1.3.1/plugin.yaml
+
+dsl_definitions:
+  os_config: &os_config
+    username: dewayne@gigaspaces.com
+    password: G1gaspac3s
+    tenant_name: gigaspaces_dewayne
+    auth_url: https://compute.datacentred.io:5000/
+
+inputs:
+  image:
+    description: image
+  flavor:
+    description: flavor
+  ssh_user:
+    description: ssh user
+  ssh_keyname:
+    description: ssh key name
+  ssh_keyfile:
+    description: ssh key file name
+  
+node_templates:
+
+  manager_host:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      agent_config:
+        install_method: none
+      image: {get_input: image}
+      flavor: {get_input: flavor}
+      management_network_name: swarm_network
+      server:
+        resource_id: swarm_manager
+      openstack_config: *os_config
+    relationships:
+      - type: cloudify.openstack.server_connected_to_port
+        target: manager_port
+      - type: cloudify.openstack.server_connected_to_floating_ip
+        target: manager_public_ip
+      - type: cloudify.openstack.server_connected_to_keypair
+        target: keypair
+
+  worker_host:
+    type: cloudify.openstack.nodes.Server
+    properties:
+      agent_config:
+        install_method: none
+      image: {get_input: image}
+      flavor: {get_input: flavor}
+      management_network_name: swarm_network
+      server:
+        resource_id: swarm_manager
+      openstack_config: *os_config
+    relationships:
+      - type: cloudify.openstack.server_connected_to_port
+        target: worker_port
+      - type: cloudify.openstack.server_connected_to_floating_ip
+        target: worker_public_ip
+      - type: cloudify.openstack.server_connected_to_keypair
+        target: keypair
+
+  manager_public_ip:
+    type: cloudify.openstack.nodes.FloatingIP
+    properties:
+      openstack_config: *os_config
+      floatingip:
+        floating_network_name: external
+
+  worker_public_ip:
+    type: cloudify.openstack.nodes.FloatingIP
+    properties:
+      openstack_config: *os_config
+      floatingip:
+        floating_network_name: external
+
+  network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      resource_id: swarm_network
+      openstack_config: *os_config
+      network:
+        name: swarm_network
+
+  secgroup:
+    type: cloudify.openstack.nodes.SecurityGroup
+    properties:
+      resource_id: swarm_secgroup
+      openstack_config: *os_config
+      rules: 
+        - port: 22
+          remote_ip_prefix: 0.0.0.0/0
+        - port: 80
+          remote_ip_prefix: 0.0.0.0/0
+        - remote_ip_prefix: 10.0.0.0/24
+
+  subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      resource_id: swarm_subnet
+      openstack_config: *os_config
+      subnet:
+        ip_version: 4
+        cidr: 10.0.0.0/24
+        gateway_ip: 10.0.0.1
+        dns_nameservers: [ "8.8.8.8" ]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: network
+      - type: cloudify.openstack.subnet_connected_to_router
+        target: router
+
+  manager_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      resource_id: manager_port
+      openstack_config: *os_config
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: network
+      - type: cloudify.relationships.depends_on
+        target: subnet
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: secgroup
+
+  worker_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      resource_id: worker_port
+      openstack_config: *os_config
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: network
+      - type: cloudify.relationships.depends_on
+        target: subnet
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: secgroup
+
+  external_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *os_config
+      use_external_resource: true
+      resource_id: external
+
+  router:
+    type: cloudify.openstack.nodes.Router
+    properties:
+      resource_id: swarm_router
+      openstack_config: *os_config
+    relationships:
+      - target: external_network
+        type: cloudify.relationships.connected_to
+
+  keypair:
+    type: cloudify.openstack.nodes.KeyPair
+    properties:
+      openstack_config: *os_config
+      resource_id: {get_input: ssh_keyname}
+      use_external_resource: true
+      private_key_path: {get_input: ssh_keyfile}
+
+  manager:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: scripts/start-manager.sh
+            process:
+              env:
+                IP: {get_attribute: [manager_host, ip]}
+            fabric_env:
+              host_string: {get_attribute: [manager_public_ip, floating_ip_address]}
+              user: {get_input: ssh_user}
+              key_filename: {get_input: ssh_keyfile}
+    relationships:
+      - target: manager_host
+        type: cloudify.relationships.contained_in
+
+  worker:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start:
+          implementation: fabric.fabric_plugin.tasks.run_script
+          inputs:
+            script_path: scripts/start-worker.sh
+            process:
+              env:
+                IP: {get_attribute: [worker_host, ip]}
+                MASTERIP: {get_attribute: [manager_host, ip]}
+                TOKEN: {get_attribute: [manager, worker_token]}
+            fabric_env:
+              host_string: {get_attribute: [worker_public_ip, floating_ip_address]}
+              user: {get_input: ssh_user}
+              key_filename: {get_input: ssh_keyfile}
+    relationships:
+      - target: worker_host
+        type: cloudify.relationships.contained_in
+      - target: manager
+        type: cloudify.relationships.connected_to

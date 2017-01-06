@@ -1,0 +1,242 @@
+plugins:
+  swarm:
+    executor: central_deployment_agent
+    source: cloudify-swarm-plugin
+
+node_types:
+      
+  ##########################################
+  # Represents a master/node
+  ##########################################
+  cloudify.swarm.Manager:
+    derived_from: cloudify.nodes.SoftwareComponent
+    properties:
+      ip:
+        description: ip address of the manager to connect to
+      port:
+        description: manager port
+        default: 2375
+      ssh_user:
+        description: used for operations requiring cli access (e.g. Compose)
+        default: ''
+      ssh_keyfile:
+        description: private key used for operations requiring cli access (e.g. Compose)
+        default: ''
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create: swarm.swarm_plugin.tasks.connect_manager
+        
+
+  ##########################################
+  # Represents a swarm microservice
+  ##########################################
+  cloudify.swarm.Microservice:
+    derived_from: cloudify.nodes.SoftwareComponent
+    properties:
+      name:
+        description: the name of the service
+      placement:
+        description: placement spec
+        default: {}
+      limits:
+        description: TBD
+        default: {}
+      reservations:
+        description: TBD
+        default: {}
+      replicas:
+        description: TBD
+        default: 1
+        type: integer
+      labels:
+        default: {}
+      compose_file:
+        description: a compose file to use.  If set, other properties are ignored
+        default: ''
+    
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        start: swarm.swarm_plugin.tasks.start_service
+        delete: swarm.swarm_plugin.tasks.rm_service
+
+  cloudify.swarm.Container:
+    derived_from: cloudify.nodes.SoftwareComponent
+    properties:
+      image:
+        description: source image (e.g. "nginx:alpine")
+        
+  cloudify.swarm.Volume:
+    derived_from: cloudify.nodes.SoftwareComponent
+    properties:
+      readonly:
+        description: readonly flag
+        type: boolean
+      source:
+        description: TBD
+      target:
+        description: TBD
+      type:
+        description: TBD
+      volume_options:
+        description: TBD
+        default: {}
+      user:
+        description: TBD
+
+  cloudify.swarm.Port:
+    derived_from: cloudify.nodes.SoftwareComponent
+    properties:
+      protocol:
+        default: tcp
+      published_port:
+        description: external port
+      target_port:
+        description: internal port
+
+relationships:
+
+  cloudify.swarm.relationships.microservice_contained_in_manager:
+    derived_from: cloudify.relationships.contained_in
+    target_interfaces:
+      cloudify.interfaces.relationship_lifecycle:
+        postconfigure:
+          implementation: swarm.swarm_plugin.tasks.add_microservice
+
+  cloudify.swarm.relationships.container_contained_in_microservice:
+    derived_from: cloudify.relationships.connected_to
+    target_interfaces:
+      cloudify.interfaces.relationship_lifecycle:
+        postconfigure:
+          implementation: swarm.swarm_plugin.tasks.add_container
+
+  cloudify.swarm.relationships.port_attached_to_microservice:
+    derived_from: cloudify.relationships.connected_to
+    target_interfaces:
+      cloudify.interfaces.relationship_lifecycle:
+        postconfigure:
+          implementation: swarm.swarm_plugin.tasks.add_port
+
+  cloudify.swarm.relationships.volume_attached_to_container:
+    derived_from: cloudify.relationships.connected_to
+    target_interfaces:
+      cloudify.interfaces.relationship_lifecycle:
+        postconfigure:
+          implementation: swarm.swarm_plugin.tasks.add_volume
+
+#
+#workflows:
+#
+#  kube_scale:
+#    mapping: kubernetes.kube_plugin.workflows.kube_scale
+#    parameters:
+#      master:
+#        description: name of master node or proxy
+#      ssh_user:
+#        description: ssh user used to run kubectl on master
+#      ssh_keyfilename:
+#        description: private key for ssh
+#      name:
+#        description: microservice node name
+#      amount:
+#        description: value or increment ( e.g. "2" or "+1" "-1")
+#        default: "+0"
+#
+#  kube_create:
+#    mapping: kubernetes.kube_plugin.workflows.kube_create
+#    parameters:
+#      master:
+#        description: name of master node or proxy
+#      url:
+#        description: url or blueprint relative path of kubernetes manifest
+#      ssh_user:
+#        description: ssh user used to run kubectl on master
+#      ssh_keyfilename:
+#        description: private key for ssh
+#
+#  kube_run:
+#    mapping: kubernetes.kube_plugin.workflows.kube_run
+#    parameters:
+#      master:
+#        description: name of master node
+#      name:
+#        description: name of the app
+#      image:
+#        description: image to run
+#      port:
+#        description: port to open
+#        default: -1
+#      replicas:
+#        description: number of replicas
+#        default: 1
+#      dry_run:
+#        description: don't actually do anything
+#        default: False
+#      ssh_user:
+#        description: ssh user used to run kubectl on master
+#      ssh_keyfilename:
+#        description: private key for ssh
+#      overrides:
+#        description: json overrides
+#        default: ''
+#
+#  kube_expose:
+#    mapping: kubernetes.kube_plugin.workflows.kube_expose
+#    parameters:
+#      master:
+#        description: name of master node
+#      name:
+#        description: name of the resource to expose
+#      resource:
+#        description: type of the resource to be exposed
+#      protocol:
+#        description: protocol to expose (TCP|UDP)
+#        default: TCP
+#      port:
+#        description: the port to be exposed
+#      target_port:
+#        description: container port to expose
+#        default: -1
+#      service_name:
+#        description: name of the newly created object
+#        default: ''
+#      ssh_user:
+#        description: ssh user used to run kubectl on master
+#      ssh_keyfilename:
+#        description: private key for ssh
+#      overrides:
+#        description: json overrides
+#        default: ''
+#
+#  kube_stop:
+#    mapping: kubernetes.kube_plugin.workflows.kube_stop
+#    parameters:
+#      master:
+#        description: name of master node
+#      name:
+#        description: name of the resource to stop
+#      resource:
+#        description: type of the resource to be stopped
+#      ssh_user:
+#        description: ssh user used to run kubectl on master
+#      ssh_keyfilename:
+#        description: private key for ssh
+#      all:
+#        description: stop all
+#        default: False
+#  
+#  kube_delete:
+#    mapping: kubernetes.kube_plugin.workflows.kube_delete
+#    parameters:
+#      master:
+#        description: name of master node
+#      name:
+#        description: name of the resource to delete
+#      resource:
+#        description: type of the resource to be deleted
+#      ssh_user:
+#        description: ssh user used to run kubectl on master
+#      ssh_keyfilename:
+#        description: private key for ssh
+#      all:
+#        description: stop all
+#        default: False

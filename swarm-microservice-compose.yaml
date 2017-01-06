@@ -1,0 +1,23 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.4/types.yaml
+  - plugins/cloudify-swarm-plugin/plugin.yaml
+
+node_templates:
+
+  master:
+    type: cloudify.swarm.Manager
+    properties:
+      ip: 172.16.0.27
+      ssh_user: ubuntu
+      ssh_keyfile: /root/.ssh/agent_key.pem
+
+  service:
+    type: cloudify.swarm.Microservice
+    properties:
+      name: testservice
+      compose_file: resources/compose.yaml
+    relationships:
+      - type: cloudify.swarm.relationships.microservice_contained_in_manager
+        target: master
