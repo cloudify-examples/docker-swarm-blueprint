@@ -7,10 +7,10 @@ imports:
 
 dsl_definitions:
   os_config: &os_config
-    username: dewayne@gigaspaces.com
-    password: G1gaspac3s
-    tenant_name: gigaspaces_dewayne
-    auth_url: https://compute.datacentred.io:5000/
+    username: ''
+    password: ''
+    tenant_name: ''
+    auth_url: ''
 
 inputs:
   image:
