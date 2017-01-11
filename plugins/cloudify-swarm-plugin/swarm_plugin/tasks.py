@@ -26,10 +26,10 @@ from cloudify.exceptions import NonRecoverableError
 from fabric.api import run,env,put,sudo
 
 
-# Called when connecting to master.  Gets ip and port
+# Called when connecting to manager.  Gets ip and port
 @operation
 def connect_manager(**kwargs):
-  ctx.logger.info("in connect_master")
+  ctx.logger.info("in connect_manager")
   info = requests.get('http://{}:{}/swarm'.format(ctx.node.properties['ip'],ctx.node.properties['port'])).json()
   ctx.instance.runtime_properties['swarm_info']=info
   ctx.logger.info("info:{}".format(ctx.instance.runtime_properties['swarm_info']))
@@ -39,7 +39,7 @@ def start_service(**kwargs):
   ctx.logger.info("in start_service")
 
   if ctx.node.properties['compose_file'] != '':
-    # get file, transfer to master, and run
+    # get file, transfer to manager, and run
     ctx.logger.info("getting compose file:{}".format(ctx.node.properties['compose_file']))
     path=ctx.download_resource(ctx.node.properties['compose_file'])
     if not 'mgr_ssh_user' in ctx.instance.runtime_properties:
@@ -125,7 +125,7 @@ def rm_service(**kwargs):
   if resp.status_code != 200:
     raise NonRecoverableError(resp.text) 
 
-# Construct the fabric environment from the supplied master
+# Construct the fabric environment from the supplied manager
 # node in kwargs
 def setfabenv(ctx):
   fabenv={}
