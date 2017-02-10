@@ -49,6 +49,8 @@ node_templates:
           port: 2377
         - remote_ip_prefix: 0.0.0.0/0
           port: 80
+        - remote_ip_prefix: 0.0.0.0/0 # rest
+          port: 2375
 
   manager_public_ip:
     type: cloudify.openstack.nodes.FloatingIP
@@ -79,8 +81,15 @@ node_templates:
                 IP: {get_attribute: [worker_host, ip]}
                 MASTERIP: {get_attribute: [manager_host, ip]}
                 TOKEN: {get_attribute: [manager, worker_token]}
+                LABEL: role=worker
     relationships:
       - target: worker_host
         type: cloudify.relationships.contained_in
       - target: manager
         type: cloudify.relationships.connected_to
+
+outputs:
+  swarm_info:
+    value:
+      manager_ip: {get_attribute: [manager_public_ip, floating_ip_address]}
+      manager_port: 2375
