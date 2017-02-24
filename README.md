@@ -59,7 +59,7 @@ To see autohealing in action, go to the Openstack Horizon dashboard and terminat
 
 To see autoscaling in action:
 * ssh to the Cloudify manager: `cfy ssh`
-* ssh to the swarm manager: `sudo ssh -i /root/.ssh/agent_key.pem ubuntu@<manager-ip>`
+* ssh to a swarm worker: `sudo ssh -i /root/.ssh/agent_key.pem ubuntu@<worker-ip>`
 * run the built in load generator container: `sudo docker service create --constraint 'node.role == worker' --restart-condition none stress /start.sh`
 * Then go to the Cloudify UI deployments tab.  See the `scale` workflow begin and grow the cluster.
 
