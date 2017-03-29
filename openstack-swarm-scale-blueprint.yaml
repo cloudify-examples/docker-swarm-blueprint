@@ -1,18 +1,62 @@
 tosca_definitions_version: cloudify_dsl_1_3
 
 imports:
-  - http://www.getcloudify.org/spec/cloudify/3.4.1/types.yaml
-  - http://www.getcloudify.org/spec/openstack-plugin/1.4/plugin.yaml
-  - http://www.getcloudify.org/spec/diamond-plugin/1.3.4/plugin.yaml
+  - http://www.getcloudify.org/spec/cloudify/4.0/types.yaml
+  - http://www.getcloudify.org/spec/openstack-plugin/2.0.1/plugin.yaml
+  - http://www.getcloudify.org/spec/diamond-plugin/1.3.5/plugin.yaml
   - imports/scale.yaml
+  - imports/swarm-blueprint.yaml
 
 inputs:
+
   image:
     description: image
+
   flavor:
     description: flavor
+
   agent_user:
     description: user for agents
+
+  key_name:
+    description: >
+      the agent public key name (created during manager bootstrap)
+    type: string
+    default: docker-swarm-blueprint-key
+
+  private_key_path:
+    type: string
+    default: ~/.ssh/docker-swarm-blueprint-key.pem
+
+  external_network_name:
+    default: external
+
+  router_name:
+    description: The Router Name
+
+  public_network_name:
+    description: The name of the Openstack public network.
+
+  public_subnet_name:
+    description: The name of the public network subnet.
+
+  private_network_name:
+    description: The name of the Openstack private network.
+
+  private_subnet_name:
+    description: The name of the private network subnet.
+
+  region:
+    default: ''
+
+dsl_definitions:
+
+  openstack_config: &openstack_config
+    username: { get_secret: keystone_username }
+    password: { get_secret: keystone_password }
+    tenant_name: { get_secret: keystone_tenant_name }
+    auth_url: { get_secret: keystone_url }
+    region: { get_input: region }
 
 node_templates:
 
@@ -25,28 +69,66 @@ node_templates:
   manager_host:
     type: cloudify.openstack.nodes.Server
     properties:
+      openstack_config: *openstack_config
       agent_config:
-        user: {get_input: agent_user}
-      image: {get_input: image}
-      flavor: {get_input: flavor}
+        user: { get_input: agent_user }
+        key: { get_property: [ key, private_key_path ] }
+        install_method: remote
+        port: 22
+        min_workers: 2
+      server:
+        image: {get_input: image}
+        flavor: {get_input: flavor}
+        userdata: |
+          #!/bin/bash
+          sudo groupadd docker
+          sudo gpasswd -a ubuntu docker
+      management_network_name: { get_property: [ public_network, resource_id ] }
     relationships:
-      - type: cloudify.openstack.server_connected_to_floating_ip
-        target: manager_public_ip
-      - type: cloudify.openstack.server_connected_to_security_group
-        target: swarm_secgroup
+      - target: key
+        type: cloudify.openstack.server_connected_to_keypair
+      - target: manager_host_port
+        type: cloudify.openstack.server_connected_to_port
       - type: cloudify.relationships.contained_in
         target: managers_tier
+
+  manager_host_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *openstack_config
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: public_network
+      - type: cloudify.relationships.depends_on
+        target: public_subnet
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: swarm_secgroup
+      - type: cloudify.openstack.port_connected_to_floating_ip
+        target: manager_public_ip
 
   worker_host:
     type: cloudify.openstack.nodes.Server
     properties:
+      openstack_config: *openstack_config
       agent_config:
-        user: {get_input: agent_user}
-      image: {get_input: image}
-      flavor: {get_input: flavor}
+        user: { get_input: agent_user }
+        key: { get_property: [ key, private_key_path ] }
+        install_method: remote
+        port: 22
+        min_workers: 2
+      server:
+        image: {get_input: image}
+        flavor: {get_input: flavor}
+        userdata: |
+          #!/bin/bash
+          sudo groupadd docker
+          sudo gpasswd -a ubuntu docker
+      management_network_name: { get_property: [ private_network, resource_id ] }
     relationships:
-      - type: cloudify.openstack.server_connected_to_security_group
-        target: swarm_secgroup
+      - target: key
+        type: cloudify.openstack.server_connected_to_keypair
+      - target: worker_host_port
+        type: cloudify.openstack.server_connected_to_port
       - type: cloudify.relationships.contained_in
         target: managers_tier
     interfaces:
@@ -72,9 +154,22 @@ node_templates:
                     devices: x?vd[a-z]+[0-9]*$
                 NetworkCollector: {}
 
+  worker_host_port:
+    type: cloudify.openstack.nodes.Port
+    properties:
+      openstack_config: *openstack_config
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: private_network
+      - type: cloudify.relationships.depends_on
+        target: private_subnet
+      - type: cloudify.openstack.port_connected_to_security_group
+        target: swarm_secgroup
+
   swarm_secgroup:
     type: cloudify.openstack.nodes.SecurityGroup
     properties:
+      openstack_config: *openstack_config
       resource_id: swarm_secgroup
       rules:
         - remote_ip_prefix: 0.0.0.0/0
@@ -86,40 +181,70 @@ node_templates:
 
   manager_public_ip:
     type: cloudify.openstack.nodes.FloatingIP
+    properties:
+      openstack_config: *openstack_config
+      floatingip:
+        floating_network_name: { get_property: [ external_network, resource_id ] }
 
-  manager:
-    type: cloudify.nodes.SoftwareComponent
-    interfaces:
-      cloudify.interfaces.lifecycle:
-        start:
-          implementation: scripts/start-manager.sh
-          inputs:
-            process:
-              env:
-                IP: {get_attribute: [manager_host, ip]}
+  private_subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: { get_input: private_subnet_name }
     relationships:
-      - target: manager_host
+      - target: private_network
         type: cloudify.relationships.contained_in
 
-  worker:
-    type: cloudify.nodes.SoftwareComponent
-    interfaces:
-      cloudify.interfaces.lifecycle:
-        configure: scripts/configure-worker.sh
-        start:
-          implementation: scripts/start-worker.sh
-          inputs:
-            process:
-              env:
-                IP: {get_attribute: [worker_host, ip]}
-                MASTERIP: {get_attribute: [manager_host, ip]}
-                TOKEN: {get_attribute: [manager, worker_token]}
-        stop: scripts/stop-worker.sh
+  private_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: { get_input: private_network_name }
+
+  public_subnet:
+    type: cloudify.openstack.nodes.Subnet
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: { get_input: public_subnet_name }
     relationships:
-      - target: worker_host
+      - target: public_network
         type: cloudify.relationships.contained_in
-      - target: manager
+      - target: router
+        type: cloudify.openstack.subnet_connected_to_router
+
+  public_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: { get_input: public_network_name }
+
+  router:
+    type: cloudify.openstack.nodes.Router
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: { get_input: router_name }
+    relationships:
+      - target: external_network
         type: cloudify.relationships.connected_to
+
+  external_network:
+    type: cloudify.openstack.nodes.Network
+    properties:
+      openstack_config: *openstack_config
+      use_external_resource: true
+      resource_id: { get_input: external_network_name }
+
+  key:
+    type: cloudify.openstack.nodes.KeyPair
+    properties:
+      openstack_config: *openstack_config
+      resource_id: { get_input: key_name }
+      private_key_path: { get_input: private_key_path }
 
 groups:
 
