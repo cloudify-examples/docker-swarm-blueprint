@@ -1,0 +1,38 @@
+node_templates:
+
+  manager:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: scripts/docker_install.py # Install Docker if not already installed.
+        start:
+          implementation: scripts/start-manager.sh
+          inputs:
+            process:
+              env:
+                IP: {get_attribute: [manager_host, ip]}
+    relationships:
+      - target: manager_host
+        type: cloudify.relationships.contained_in
+
+  worker:
+    type: cloudify.nodes.SoftwareComponent
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: scripts/docker_install.py # Install Docker if not already installed.
+        start:
+          implementation: scripts/start-worker.sh
+          inputs:
+            process:
+              env:
+                IP: {get_attribute: [worker_host, ip]}
+                MASTERIP: {get_attribute: [manager_host, ip]}
+                TOKEN: {get_attribute: [manager, worker_token]}
+                LABEL: role=worker
+    relationships:
+      - target: worker_host
+        type: cloudify.relationships.contained_in
+      - target: manager
+        type: cloudify.relationships.connected_to

@@ -1,0 +1,215 @@
+tosca_definitions_version: cloudify_dsl_1_3
+
+description: >
+  This blueprint creates a Docker Swarm Cluster.
+  It includes a master and a worker.
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/4.0/types.yaml
+  - http://getcloudify.org.s3.amazonaws.com/spec/aws-plugin/1.4.4/plugin.yaml
+  - imports/swarm-blueprint.yaml
+
+inputs:
+
+  key_name:
+    default: docker-swarm-blueprint-key
+
+  private_key_path:
+    default: ~/.ssh/docker-swarm-blueprint-key.pem
+
+  vpc_id:
+    type: string
+
+  vpc_cidr_block:
+    type: string
+
+  public_subnet_id:
+    type: string
+
+  public_subnet_cidr:
+    type: string
+
+  private_subnet_id:
+    type: string
+
+  private_subnet_cidr:
+    type: string
+
+  ec2_region_name:
+    default: us-east-1
+
+  ec2_region_endpoint:
+    default: ec2.us-east-1.amazonaws.com
+
+  availability_zone:
+    default: us-east-1e
+
+  ami:
+    description: >
+      Amazon Ubuntu 14.04 AMI
+
+  instance_type:
+    description: >
+      Agent VM Instance Type
+
+  agent_user:
+    default: ubuntu
+
+dsl_definitions:
+
+    aws_config: &aws_config
+      aws_access_key_id: { get_secret: aws_access_key_id }
+      aws_secret_access_key: { get_secret: aws_secret_access_key }
+      ec2_region_name: { get_input: ec2_region_name }
+      ec2_region_endpoint: { get_input: ec2_region_endpoint }
+
+node_templates:
+
+  manager_host:
+    type: cloudify.aws.nodes.Instance
+    properties:
+      agent_config:
+        install_method: remote
+        port: 22
+        user: { get_input: agent_user }
+        key: { get_property: [ key, private_key_path ] }
+        min_workers: 2
+      aws_config: *aws_config
+      image_id: { get_input: ami }
+      instance_type: { get_input: instance_type }
+      parameters:
+        user_data: |
+          #!/bin/bash
+          sudo groupadd docker
+          sudo gpasswd -a ubuntu docker
+        placement: { get_property: [ public_subnet, availability_zone ] }
+    relationships:
+      - type: cloudify.aws.relationships.instance_connected_to_keypair
+        target: key
+      - type: cloudify.aws.relationships.instance_connected_to_subnet
+        target: public_subnet
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: ssh_group
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: swarm_secgroup
+      - type: cloudify.aws.relationships.instance_connected_to_elastic_ip
+        target: manager_public_ip
+
+  worker_host:
+    type: cloudify.aws.nodes.Instance
+    properties:
+      agent_config:
+        install_method: remote
+        port: 22
+        user: { get_input: agent_user }
+        key: { get_property: [ key, private_key_path ] }
+        min_workers: 2
+      aws_config: *aws_config
+      image_id: { get_input: ami }
+      instance_type: { get_input: instance_type }
+      parameters:
+        user_data: |
+          #!/bin/bash
+          sudo groupadd docker
+          sudo gpasswd -a ubuntu docker
+        placement: { get_property: [ private_subnet, availability_zone ] }
+    relationships:
+      - type: cloudify.aws.relationships.instance_connected_to_keypair
+        target: key
+      - type: cloudify.aws.relationships.instance_connected_to_subnet
+        target: private_subnet
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: ssh_group
+      - type: cloudify.aws.relationships.instance_connected_to_security_group
+        target: swarm_secgroup
+
+  ssh_group:
+    type: cloudify.aws.nodes.SecurityGroup
+    properties:
+      aws_config: *aws_config
+      description: Puppet Group
+      rules:
+        - ip_protocol: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: { get_input: vpc_cidr_block }
+    relationships:
+      - type: cloudify.aws.relationships.security_group_contained_in_vpc
+        target: vpc
+
+  swarm_secgroup:
+    type: cloudify.aws.nodes.SecurityGroup
+    properties:
+      aws_config: *aws_config
+      description: Swarm Group
+      rules:
+        - ip_protocol: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: { get_input: vpc_cidr_block }
+        - ip_protocol: tcp
+          from_port: 80
+          to_port: 80
+          cidr_ip: 0.0.0.0/0
+        - ip_protocol: tcp
+          from_port: 2375
+          to_port: 2375
+          cidr_ip: { get_input: vpc_cidr_block }
+        - ip_protocol: tcp
+          from_port: 2377
+          to_port: 2377
+          cidr_ip: { get_input: vpc_cidr_block }
+    relationships:
+      - type: cloudify.aws.relationships.security_group_contained_in_vpc
+        target: vpc
+
+  public_subnet:
+    type: cloudify.aws.nodes.Subnet
+    properties:
+      aws_config: *aws_config
+      use_external_resource: true
+      resource_id: { get_input: public_subnet_id }
+      cidr_block: { get_input: public_subnet_cidr }
+      availability_zone: { get_input: availability_zone }
+    relationships:
+      - type: cloudify.aws.relationships.subnet_contained_in_vpc
+        target: vpc
+
+  private_subnet:
+    type: cloudify.aws.nodes.Subnet
+    properties:
+      aws_config: *aws_config
+      use_external_resource: true
+      resource_id: { get_input: private_subnet_id }
+      cidr_block: { get_input: private_subnet_cidr }
+      availability_zone: { get_input: availability_zone }
+    relationships:
+      - type: cloudify.aws.relationships.subnet_contained_in_vpc
+        target: vpc
+
+  vpc:
+    type: cloudify.aws.nodes.VPC
+    properties:
+      aws_config: *aws_config
+      use_external_resource: true
+      resource_id: { get_input: vpc_id }
+      cidr_block: { get_input: vpc_cidr_block }
+
+  key:
+    type: cloudify.aws.nodes.KeyPair
+    properties:
+      aws_config: *aws_config
+      resource_id: { get_input: key_name }
+      private_key_path: { get_input: private_key_path }
+
+  manager_public_ip:
+    type: cloudify.aws.nodes.ElasticIP
+    properties:
+      aws_config: *aws_config
+      domain: vpc
+
+outputs:
+  swarm_info:
+    value:
+      manager_ip: {get_attribute: [manager_public_ip, aws_resource_id]}
+      manager_port: 2375
